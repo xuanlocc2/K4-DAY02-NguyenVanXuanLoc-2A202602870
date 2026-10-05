@@ -138,7 +138,8 @@ def main() -> None:
     fig.savefig(out / "inference_tradeoff.png", dpi=130)
 
     ok = df[df.b1_p95_ms <= 100]
-    cheapest_best = df.sort_values(["val_macro_f1", "b1_p95_ms"], ascending=[False, True]).iloc[0]
+    cand = df[df.id.isin(["I00", "I01", "I02", "I03", "I04", "I06"])]  # phương pháp finalize.py hỗ trợ
+    cheapest_best = cand.sort_values(["val_macro_f1", "b1_p95_ms"], ascending=[False, True]).iloc[0]
     rt = ok.sort_values(["val_macro_f1", "b1_p95_ms"], ascending=[False, True]).iloc[0] if len(ok) else None
     chosen = {"final_by_val": cheapest_best.to_dict(), "realtime_p95_le_100ms": None if rt is None else rt.to_dict(),
               "temperature": Tc, "base_run": a.run, "gpu": lat_rows[0]["gpu"]}

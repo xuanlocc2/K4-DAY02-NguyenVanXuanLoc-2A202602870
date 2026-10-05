@@ -65,10 +65,11 @@ def main() -> None:
     else:  # final: T00 seed 1,2 (+test) và F01 seed 0,1,2 (test do finalize.py)
         ov = T.parse_overrides(a.over)
         for s in a.seeds:
-            if s > 0:
+            if s > 0 and want("T00"):
                 go(exp_id="T00", backbone=a.backbone, seed=s, save_test_predictions=True, **base)
             # F01: KHÔNG ghi test ở đây; finalize.py chạy test đúng một lần với phương pháp suy luận đã chọn
-            go(exp_id="F01", tag=f"{a.backbone}_final", backbone=a.backbone, seed=s, **{**base, **ov})
+            if want("F01"):
+                go(exp_id="F01", tag=f"{a.backbone}_final", backbone=a.backbone, seed=s, **{**base, **ov})
 
 
 if __name__ == "__main__":
