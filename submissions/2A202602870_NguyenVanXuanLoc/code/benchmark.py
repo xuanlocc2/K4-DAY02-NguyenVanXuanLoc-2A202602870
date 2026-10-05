@@ -1,48 +1,79 @@
-"""benchmark.py - đo độ trễ suy luận đúng cách (slide Day 2, trang 73 và 75; GUIDE.md mục 4.1).
+"""benchmark.py - đo độ trễ suy luận đúng cách (warmup, synchronize, >= 50 lần, p50/p95/p99).
 
-PSEUDO-CODE: bạn tự hoàn thiện mọi hàm có `raise NotImplementedError`.
-
-Quy tắc đo (vi phạm bị trừ điểm, RUBRIC mục 3):
-  - warmup: bỏ >= 10 lần chạy đầu
-  - đồng bộ GPU: torch.cuda.synchronize() (hoặc CUDA event) TRƯỚC và SAU đoạn cần đo
-  - >= 50 lần đo, báo cáo p50, p95, p99 (không chỉ trung bình)
-  - ghi rõ GPU, dtype (FP32/AMP/FP16), batch, độ phân giải, có/không gộp BN, phiên bản torch
-  - chọn và ghi rõ có tính tiền xử lý hay không
+Điều kiện đo: chỉ đo forward của model trên tensor ngẫu nhiên đã nằm sẵn trên thiết bị
+(KHÔNG gồm giải mã ảnh/tiền xử lý), eval + inference_mode.
 """
 from __future__ import annotations
 
+import copy
+import time
+
+import numpy as np
+import torch
+
 
 def bench(fn, warmup: int = 10, iters: int = 100, sync=None) -> dict:
-    """Đo thời gian một hàm `fn()` (không tham số), trả về mili-giây.
+    """Thời gian một lần gọi fn() tính bằng ms: p50/p95/p99/mean."""
+    sync = sync or (lambda: None)
+    for _ in range(warmup):
+        fn()
+    sync()
+    ts = []
+    for _ in range(iters):
+        sync()
+        t0 = time.perf_counter()
+        fn()
+        sync()
+        ts.append((time.perf_counter() - t0) * 1000)
+    a = np.asarray(ts)
+    return {"p50": float(np.percentile(a, 50)), "p95": float(np.percentile(a, 95)),
+            "p99": float(np.percentile(a, 99)), "mean": float(a.mean()), "n": iters}
 
-    `sync` là hàm đồng bộ (ví dụ torch.cuda.synchronize) hoặc None trên CPU.
 
-    TODO:
-      - chạy warmup lần đầu rồi bỏ
-      - với mỗi lần đo: sync(); t0 = time.perf_counter(); fn(); sync(); lấy hiệu * 1000
-      - trả về {"p50": ..., "p95": ..., "p99": ..., "mean": ..., "n": iters}
-    Gợi ý: dùng numpy.percentile hoặc torch.quantile.
-    """
-    raise NotImplementedError("TODO")
+def _prep(model, dtype: str, device: str):
+    m = copy.deepcopy(model).to(device).eval()
+    if dtype == "fp16":
+        m = m.half()
+    return m
 
 
 def latency_report(model, batch_size: int, img_size: int, dtype: str = "fp32", device: str = "cuda",
                    warmup: int = 10, iters: int = 100) -> dict:
-    """Đo độ trễ forward của `model` với đầu vào ngẫu nhiên (batch_size, 3, img_size, img_size).
+    """dtype: fp32 | amp (autocast fp16) | fp16 (model.half()). Trả dict ghi thẳng vào sheet Latency."""
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+    m = _prep(model, dtype, device)
+    x = torch.randn(batch_size, 3, img_size, img_size, device=device,
+                    dtype=torch.float16 if dtype == "fp16" else torch.float32)
+    sync = torch.cuda.synchronize if device == "cuda" else None
 
-    Trả về dict có thể ghi thẳng vào sheet `Latency` của results.xlsx:
-        {"gpu": ..., "dtype": ..., "batch": ..., "img_size": ..., "p50": ..., "p95": ..., "p99": ...,
-         "images_per_s": batch_size / (p50 / 1000), "torch": torch.__version__}
+    @torch.inference_mode()
+    def fn():
+        with torch.autocast(device, dtype=torch.float16, enabled=(dtype == "amp" and device == "cuda")):
+            m(x)
 
-    TODO:
-      - model.eval(), torch.inference_mode()
-      - dtype: "fp32" | "amp" (autocast) | "fp16" (model.half())
-      - gọi bench(...) với sync phù hợp; lấy tên GPU bằng torch.cuda.get_device_name
-      - Nhớ: ở batch 1, AMP có thể CHẬM hơn FP32 (slide trang 73): đo thật, đừng giả định
-    """
-    raise NotImplementedError("TODO")
+    r = bench(fn, warmup, iters, sync)
+    return {"gpu": torch.cuda.get_device_name(0) if device == "cuda" else "CPU", "dtype": dtype,
+            "batch": batch_size, "img_size": img_size, **r,
+            "images_per_s": batch_size / (r["p50"] / 1000), "torch": torch.__version__}
 
 
 def tta_latency(model, k_views: int, **kw) -> dict:
-    """Độ trễ của TTA K view: xấp xỉ K lần một lượt chạy (slide trang 63). TODO: đo thật, so với K * p50."""
-    raise NotImplementedError("TODO")
+    """Độ trễ TTA K view (K lượt forward batch 1 nối tiếp) và tỉ lệ so với K * p50 một view."""
+    single = latency_report(model, **kw)
+    device = "cuda" if torch.cuda.is_available() and kw.get("device", "cuda") == "cuda" else "cpu"
+    dtype = kw.get("dtype", "fp32")
+    m = _prep(model, dtype, device)
+    x = torch.randn(kw["batch_size"], 3, kw["img_size"], kw["img_size"], device=device,
+                    dtype=torch.float16 if dtype == "fp16" else torch.float32)
+    sync = torch.cuda.synchronize if device == "cuda" else None
+
+    @torch.inference_mode()
+    def fn():
+        with torch.autocast(device, dtype=torch.float16, enabled=(dtype == "amp" and device == "cuda")):
+            for _ in range(k_views):
+                m(x)
+
+    r = bench(fn, kw.get("warmup", 10), kw.get("iters", 100), sync)
+    return {**single, **{k: r[k] for k in ("p50", "p95", "p99", "mean")}, "k_views": k_views,
+            "ratio_vs_k_times_single": r["p50"] / (k_views * single["p50"])}
