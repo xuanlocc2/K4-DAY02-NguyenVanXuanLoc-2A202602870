@@ -13,8 +13,15 @@
 
 Nhận xét: sau 2 epoch, ConvNeXt-T và ViT-S (pretrained mạnh hơn, LayerNorm) vượt xa ResNet-50/MobileNet/EfficientNet; khoảng cách này nhiều khả năng do chưa hội tụ (lr thấp, BN), không nên kết luận về kiến trúc. Độ trễ p50 batch 1 ở đây là đo sơ bộ (warmup 10, 50 lần, có synchronize) lúc huấn luyện.
 
-## Bước 2 - Công thức huấn luyện: **KHÔNG hoàn thành**
-Các ablation (T01 aug, T03 label smoothing, T05 sampler cân bằng) nằm trong `run_all.py` nhưng bị bỏ qua do hết ngân sách thời gian của kernel. Không có kết luận về trục huấn luyện nào.
+## Bước 2 - Công thức huấn luyện (resnet50, val, seed 0, 2 epoch; mỗi run đổi MỘT trục so với T00)
+| exp | Trục | Thay đổi | Val macro-F1 | Val top-1 | Val ECE |
+|---|---|---|---|---|---|
+| T00 | mốc | - | 0.456 (3 seed: 0.456/0.474/0.462) | 0.656 | 0.070 |
+| T01 | augmentation | ColorJitter | 0.478 | 0.667 | 0.096 |
+| T03 | loss | label smoothing 0.1 | 0.488 | 0.672 | 0.133 |
+| T05 | mất cân bằng | WeightedRandomSampler | 0.548 | 0.556 | 0.050 |
+
+Chỉ 1 seed mỗi ablation, trong khi std giữa các seed của T00 khoảng 0.009: mức tăng của T01/T03 (+0.02-0.03) chỉ nhỉnh hơn nhiễu một chút; T05 (+0.09 macro-F1, nhưng top-1 giảm) có vẻ thật nhưng đổi lấy top-1. Chưa thử Mixup/CutMix/EMA/focal. Không dùng kết quả này để chọn F01 (F01 đã chạy trước khi có các ablation).
 
 ## Bước 3 - Suy luận: **KHÔNG hoàn thành**
 `infer_all.py` (TTA, ensemble, FP16, gộp BN, độ trễ p50/p95/p99) chưa chạy được trên Kaggle, nên không có sheet Inference/Latency và không có cấu hình p95 <= 100 ms được đo đúng cách. Chỉ có temperature scaling (T khớp trên val) trong `finalize.py`.
@@ -24,7 +31,7 @@ Vì không có ablation, "chung kết" F01 chỉ là cấu hình mốc (ResNet-5
 
 | Cấu hình | Seed | Top-1 test | Macro-F1 test | ECE test |
 |---|---|---|---|---|
-| T00 mốc (resnet50) | 1, 2 (thiếu seed 0) | 0.668 +- 0.006 | 0.470 +- 0.012 | 0.065 |
+| T00 mốc (resnet50) | 0, 1, 2 | 0.665 +- 0.007 | 0.467 +- 0.010 | 0.068 |
 | F01 (mốc + T) | 0 (chỉ 1 seed) | 0.651 | 0.442 | 0.033 |
 | F01 chưa temperature | 0 | 0.651 | 0.442 | 0.074 |
 
@@ -34,7 +41,7 @@ Vì không có ablation, "chung kết" F01 chỉ là cấu hình mốc (ResNet-5
 - F01 (seed 0) và T00 (seed 1, 2) khác seed nên so sánh F01 với T00 không có ý nghĩa thống kê; không khẳng định cải thiện.
 
 ## Hạn chế / phần thiếu (trung thực)
-1. Chỉ 2 epoch/run; 3 seed không đủ: T00 có seed 1, 2; F01 có seed 0.
-2. Không có T00 seed 0, không có ablation, không có sheet Inference/Latency đo đúng cách, các PNG curves chỉ có cho các run đã chạy.
+1. Chỉ 2 epoch/run; F01 chỉ có seed 0 (T00 đủ 3 seed); ablation chỉ 1 seed.
+2. F01 không phải tổ hợp tốt nhất từ ablation; không có sheet Inference/Latency đo đúng cách, các PNG curves chỉ có cho các run đã chạy.
 3. Notebook `code/lab_day2.ipynb` vẫn là bản khung (các bước EDA/kiểm tra pipeline chưa điền).
 4. Checkpoint và dữ liệu không được commit.
